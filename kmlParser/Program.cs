@@ -6,24 +6,34 @@ using System.Threading.Tasks;
 using System.Data.Spatial;
 using System.Xml;
 using System.IO;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using MongoDB.Driver;
 using MongoDB.Bson;
-using System.Diagnostics;
 using System.Data.SqlTypes;
 using Microsoft.SqlServer.Types;
 
-/* Programa atualiza documentos num banco MongoDB complementando informação de posicionamento 
- com cidade, estado, sigla, micro e mesorregiões. Dados buscados de arquivo KML cidades Brasil.
- Fonte dos dados: http://www.gmapas.com/poligonos-ibge/municipios-do-brasil */
+/// <summary>
+/// Programa atualiza documentos num banco MongoDB complementando os dados de posicionamento 
+/// do carro com informações de cidade, estado, sigla, micro e mesorregiões. 
+/// Os dados são buscados de arquivo KML das cidades  do Brasil.
+/// Fonte dos dados: http://www.gmapas.com/poligonos-ibge/municipios-do-brasil */
+/// </summary>
 
 namespace kmlParser
 {
+    /// <summary>
+    /// GeographicCoordinate: classe provê métodos para configurar, editar e validar informações
+    /// de posicionamento em latitude e longitude
+    /// </summary>
 
     public class GeographicCoordinate
     {
         private const double Tolerance = 0.0001;
 
+        /// <summary>
+        /// Construtor
+        /// </summary>
+        /// <param name="longitude">Auto</param>
+        /// <param name="latitude">Auto</param>
         public GeographicCoordinate(double longitude, double latitude)
         {
             this.Longitude = longitude;
@@ -32,7 +42,15 @@ namespace kmlParser
 
         public double Latitude { get; set; }
         public double Longitude { get; set; }
-        
+
+        /// <summary>
+        /// Sobrecarga de operador de igualdade. Testa se dois objetos GeographicCoordinate
+        /// possuem informações do mesmo local em latitude e longitude dentro de tolerância 
+        /// especificada.
+        /// </summary>
+        /// <param name="a"> Primeira coordenada para comparação</param>
+        /// <param name="b"> Segunda coordenada para comparação</param>
+        /// <returns> bool </returns>
         public static bool operator ==(GeographicCoordinate a, GeographicCoordinate b)
         {
             // If both are null, or both are same instance, return true.
@@ -52,11 +70,23 @@ namespace kmlParser
             return (latResult < Tolerance) && (lonResult < Tolerance);
         }
 
+        /// <summary>
+        /// Sobrecarga de operador retorna o inverso do método 'operator =='
+        /// </summary>
+        /// <param name="a"></param>
+        /// <param name="b"></param>
+        /// <returns></returns>
         public static bool operator !=(GeographicCoordinate a, GeographicCoordinate b)
         {
             return !(a == b);
         }
 
+        /// <summary>
+        /// Equals: sobrecarga do método Equals padrão para testar se dois objetos GeographicCoordinate 
+        /// são iguais dentro da tolerância configurada.
+        /// </summary>
+        /// <param name="obj"> Objeto contra o qual o objeto chamador do método sera comparado. </param>
+        /// <returns> bool </returns>
         public override bool Equals(object obj)
         {
             // Check for null values and compare run-time types.
@@ -80,8 +110,17 @@ namespace kmlParser
         }
     }
 
+    /// <summary>
+    /// Brazil: Classe gerencia conversão de sigla para nome do estado brasileiro correspondente
+    /// </summary>
+    
     public class Brazil
     {
+        /// <summary>
+        /// Retorna o nome do estado brasileiro correspondente a sigla do estado fornecida
+        /// </summary>
+        /// <param name="state"> Sigla representando um estado brasileiro </param>
+        /// <returns> Nome do estao brasileiro </returns>
         public static string GetState(string state)
         {
             switch (state)
@@ -172,10 +211,23 @@ namespace kmlParser
         }
     }
 
+    /// <summary>
+    /// DbGeographyUtil: Classe armazena as informações extraídas do arquivo KML dos municípios num dicionário
+    /// cuja chave é uma string que agrega as informações do município. Veja <see cref="formatCityKeyFormatted"/>.
+    /// </summary>
+
     class DbGeographyUtil
     {
-
+        /// <summary>
+        /// cityCoordinatesList: dicionario segura informações de posicionamento de cidades. A estrutura 
+        /// KeyValuePair<String, DbGeography> corresponde à informações da cidade agregadas numa string e 
+        /// à um objeto do tipo que armazena informações do polígono geográfico relativo à cidade, respectivamente.
+        /// </summary>
         Dictionary<String, DbGeography> cityCoordinatesList = new Dictionary<String, DbGeography>();
+
+        /// <summary>
+        /// Retorna um dicionario contendo os polígonos das cidades brasileiras. Chave do dicionário: nome da cidade
+        /// </summary>
         public Dictionary<String, DbGeography> Coordenadas
         {
             get
@@ -184,6 +236,19 @@ namespace kmlParser
             }
         }
 
+        /// <summary>
+        /// formatCityKeyFormatted: cria uma string contendo as informações da cidade em questão. 
+        /// Esse método foi criado para unificar numa string todas as informações a serem 
+        /// preenchidas no documento MongoDB
+        /// </summary>
+        /// <param name="cityName">Auto</param>
+        /// <param name="estado">Auto</param>
+        /// <param name="sigla">Auto</param>
+        /// <param name="mesoregiao">Auto</param>
+        /// <param name="nomemeso">Auto</param>
+        /// <param name="microregiao">Auto</param>
+        /// <param name="nomemicro">Auto</param>
+        /// <returns> string </returns>
         public string formatCityKeyFormatted(string cityName, string estado, string sigla, string mesoregiao, string nomemeso, string microregiao, string nomemicro)
         {
             StringBuilder key = new StringBuilder();
@@ -197,22 +262,41 @@ namespace kmlParser
             return key.ToString();
         }
 
+        /// <summary>
+        /// buscaCidadePorLatLongAsync: Cria Task para ser utilizada numa chamada assíncrona. 
+        /// Retorna o nome da cidade cuja coordenada recebida como parâmetro intercepte o (ou seja interna ao) polígono.
+        /// </summary>
+        /// <param name="coord"> coordenada (Longitude, Latitude) da cidade desejada </param>
+        /// <returns> Task<string> que realiza a busca no dicionario cidades, coordenadas </string></returns>
         public Task<string> buscaCidadePorLatLongAsync(DbGeography coord)
         {
-            return Task.Factory.StartNew(() =>
+            try
             {
-                foreach (KeyValuePair<string, DbGeography> city in cityCoordinatesList)
+                return Task.Factory.StartNew(() =>
                 {
-                    //if (coord.Distance(city.Value) <= 0)
-                    if (coord.Intersects(city.Value))
+                    foreach (KeyValuePair<string, DbGeography> city in cityCoordinatesList)
                     {
-                        return city.Key;
+                        //if (coord.Distance(city.Value) <= 0)
+                        if (coord.Intersects(city.Value))
+                        {
+                            return city.Key;
+                        }
                     }
-                }
+                    return null;
+                });
+            } catch (AggregateException ae)
+            {
+                Console.WriteLine("Exception: " + ae.ToString());
                 return null;
-            });
+            }
         }
 
+        /// <summary>
+        /// buscaCidadePorLatLong: versão síncrona do método buscaCidadePorLatLongAsync. 
+        /// Retorna o nome da cidade cuja coordenada recebida como parâmetro intercepte o (ou seja interna ao) polígono.
+        /// </summary>
+        /// <param name="coord"> coordenada (Longitude, Latitude) da cidade desejada </param>
+        /// <returns> string contendo o nome da cidade </returns>
         public string buscaCidadePorLatLong(DbGeography coord)
         {
             foreach(KeyValuePair<string, DbGeography> city in cityCoordinatesList)
@@ -227,12 +311,25 @@ namespace kmlParser
             return "";
         }
 
+        /// <summary>
+        /// ConvertLatLonToDbGeography: 
+        /// </summary>
+        /// <param name="longitude"></param>
+        /// <param name="latitude"></param>
+        /// <returns> string contendo um 'Well-known_text' de PONTO geográfico para criação de objeto DbGeography
+        /// https://en.wikipedia.org/wiki/Well-known_text </returns>
         public static DbGeography ConvertLatLonToDbGeography(double longitude, double latitude)
         {
             var point = string.Format("POINT({1} {0})", latitude, longitude);
             return DbGeography.FromText(point);
         }
 
+        /// <summary>
+        /// ConvertStringArrayToGeographicCoordinates: Cria objeto GeographicCoordinate a partir de uma string 
+        /// formato 'longitude, latitude'. 
+        /// </summary>
+        /// <param name="pointString"></param>
+        /// <returns>Objeto GeographicCoordinate relativo ao PONTO </returns>
         public static GeographicCoordinate ConvertStringArrayToGeographicCoordinates(string pointString)
         {
             var points = pointString.Split(',');
@@ -241,6 +338,14 @@ namespace kmlParser
             return coordinates;
         }
 
+        /// <summary>
+        /// ConvertGeoCoordinatesToPolygon: 
+        /// </summary>
+        /// <param name="coordinates"> Lista de objetos do tipo GeographicCoordinate das coordenadas que delimitam 
+        /// o polígono da cidade desejada 
+        /// </param>
+        /// <returns>string contendo um 'Well-known_text' de POLIGONO geográfico para criação de objeto DbGeography.
+        /// https://en.wikipedia.org/wiki/Well-known_text </returns>
         public static DbGeography ConvertGeoCoordinatesToPolygon(IEnumerable<GeographicCoordinate> coordinates)
         {
             var coordinateList = coordinates.ToList();
@@ -279,12 +384,16 @@ namespace kmlParser
             //return DbGeography.PolygonFromText(sb.ToString(), 4326);
         }
 
-        public void Fence_ImportBrazilianCitiesFromKMLFile()
+        /// <summary>
+        /// Fence_ImportBrazilianCitiesFromKMLFile: 
+        /// </summary>
+        /// <param name="path_to_kml_file"></param>
+        public void Fence_ImportBrazilianCitiesFromKMLFile(string path_to_kml_file)
         {
             int importCounter = 0;
             StringBuilder errorMessages = new StringBuilder();
 
-            using (StreamReader fileReader = new StreamReader("C:\\Users\\Pablo\\Downloads\\brasil.kml"))
+            using (StreamReader fileReader = new StreamReader(path_to_kml_file))
             {
                 XmlDocument xml = new XmlDocument();
                 xml.Load(fileReader);
@@ -407,7 +516,12 @@ namespace kmlParser
             //Assert.IsTrue(String.IsNullOrWhiteSpace(errorMessages.ToString()));
         }
 
-        // CoordinateOrder.LongitudeLatitude
+        /// <summary>
+        /// GetCoordinateFromFormattedString: Retorna objeto DbGEography do polígono referente a cidade
+        /// das coordenadas passadas como parâmtro.
+        /// </summary>
+        /// <param name="pontos"> Lista de strings contendo PONTOS 'well-known_text' das coordenadas </param>
+        /// <returns> Objeto DbGeography do polígono </returns>
         public DbGeography GetCoordinateFromFormattedString(IEnumerable<string> pontos)
         {
             GeographicCoordinate geographyObj;
@@ -423,6 +537,11 @@ namespace kmlParser
             return polygon;
         }
 
+        /// <summary>
+        /// GetCoordinatesFromKMLPolygonElement: 
+        /// </summary>
+        /// <param name="polygonElement"></param>
+        /// <returns></returns>
         private DbGeography GetCoordinatesFromKMLPolygonElement(XmlElement polygonElement)
         {
             DbGeography coordinates = null;
@@ -451,6 +570,12 @@ namespace kmlParser
 
     class Program
     {
+        /// <summary>
+        /// resolveDocumentos: 
+        /// </summary>
+        /// <param name="carroConectado"> Objeto de referência da coleção MongoDB 'carroConectado'</param>
+        /// <param name="objUtil"> Objeto contendo as informações carregadas do arquivo KML</param>
+        /// <param name="filter"> Objeto contendo o filtro para consulta de documentos no MongoDB</param>
         public static void resolveDocumentos(IMongoCollection<BsonDocument> carroConectado, DbGeographyUtil objUtil, BsonDocument filter)
         {
             carroConectado.Find(filter).ForEachAsync(async (document) =>
@@ -495,13 +620,17 @@ namespace kmlParser
 
                     Console.WriteLine("cityName {2} {1} {0}", point[0], point[1], pos["Cidade"]);
                 }
-                catch (Exception e)
+                catch (AggregateException e)
                 {
-                    BsonDocument data = (BsonDocument)document["Data"];
-                    BsonDocument pos = (BsonDocument)data["Position"];
-                    BsonArray point = (BsonArray)pos["Point"];
+                    e.Handle((x) =>
+                    {
+                        BsonDocument data = (BsonDocument)document["Data"];
+                        BsonDocument pos = (BsonDocument)data["Position"];
+                        BsonArray point = (BsonArray)pos["Point"];
 
-                    Console.WriteLine("Erro: {1} {0}", point[0], point[1]);
+                        Console.WriteLine("Erro: {1} {0}", point[0], point[1]);
+                        return false;
+                    });
                 }
 
             }).Wait();
@@ -512,11 +641,11 @@ namespace kmlParser
             var mongoClient = new MongoClient("mongodb://localhost:27017");
             var database = mongoClient.GetDatabase("local");
 
-            IMongoCollection<BsonDocument> carroConectado = database.GetCollection<BsonDocument>("carroconectado3");
+            IMongoCollection<BsonDocument> carroConectado = database.GetCollection<BsonDocument>("carroconectado20161003_2");
             
             DbGeographyUtil objUtil = new DbGeographyUtil();
 
-            objUtil.Fence_ImportBrazilianCitiesFromKMLFile();
+            objUtil.Fence_ImportBrazilianCitiesFromKMLFile("C:\\Users\\Pablo\\Downloads\\brasil.kml");
 
             // FIXME: trata objetos que nao foram atualizados na base de dados
             // Coordenadas nao sao "matched" com as coordenadas do KML fornecido
